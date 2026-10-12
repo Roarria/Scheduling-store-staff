@@ -1,5 +1,5 @@
 ---
-title: "Zaawansowane Modele Liniowe"
+title: "Model ruchu w sklepie"
 subtitle: "Regresja Poissona"
 author: "Aleksandra Kozłowska"
 date: "2026-04-01"
