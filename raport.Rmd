@@ -1,0 +1,328 @@
+---
+title: "Zaawansowane Modele Liniowe"
+subtitle: "Regresja Poissona"
+author: "Aleksandra Kozłowska"
+date: "2026-04-01"
+output: 
+  pdf_document:
+    toc: false
+    toc_depth: 2
+    latex_engine: xelatex
+header-includes:
+  - \usepackage{booktabs}
+  - \usepackage{caption}
+  - \captionsetup{justification=centering, singlelinecheck=false}
+---
+
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(
+  echo = FALSE,
+  warning = FALSE,
+  messages = FALSE,
+  include=FALSE,
+  fig.align = "center")
+  
+library(ggplot2)
+library(car)
+library(knitr)
+library(kableExtra)
+
+```
+
+# Wprowadzenie
+Omawiany zbiór danych z pliku "*sklep*" zawiera informacje o liczbie klientów przychodzących do pewnego sklepu w okresie około trzech miesięcy. W zbiorze znajdują się kolumny:
+
+* *no.klients* - liczba klientów obsłużonych w danej godzinie (wartości: $0,1,2,\ldots$);
+
+* *day* - dzień tygodnia (wartości: poniedziałek, wtorek, $\ldots$, niedziela);
+
+* *hour* - godzina (wartości: $8,9,\ldots,23$);
+
+* *events* - informacja o tym, czy w danym dniu miało miejsce jakieś wydarzenie sportowe (wartości: $0$ - nie, $1$ - tak).
+
+Celem raportu jest przeanalizowanie danych za pomocą regresji Poissona, traktując liczbę obsłużonych klientów jako zmienną objaśnianą ($y$), a pozostałe zmienne jako potencjalne predyktory.
+Struktura danych wygląda następująco:
+
+```{r dane, include=TRUE}
+dane <- read.csv("C:/Users/olako/OneDrive/Pulpit/ZML/lista 2/sklep")
+dane_df <- data.frame(dane)
+kable(dane_df[1:10,])
+```
+
+\newpage
+
+# Wstępna analiza danych
+
+W ramach wstępnej analizy danych sporządzono boxploty zmiennej objaśnianej $y$ w zależności od każdego predyktora.
+
+```{r boxplot - day, include=TRUE}
+dane$day <- factor(dane$day, levels=c("Monday", "Tuesday", "Wednesday", "Thursday",
+                                      "Friday", "Saturday", "Sunday"))
+
+boxplot(no.klients~day, data=dane, xlab="Dzień tygodnia (day)", ylab="Liczba klientów (no.klients)")
+```
+
+Wykres pudełkowy liczby klientów w zależności od dnia tygodnia wskazuje na znaczącą różnice rozkładów zmiennej między dniami roboczymi i weekendowymi. Od poniedziałku do piątku mediana obsłużonych osób jest znacząco wyższa (ok. $30$ klientów na godzinę) i towarzyszy jej duża zmienność danych oraz liczne wartości odstające sięgające $80$ osób. Sugeruje to występowanie intensywnych godzin szczytu. Z kolei w soboty i niedziele ruch jest wyraźnie niższy (mediana ok. 15 klientów na godzinę) i charakteryzuje się znacznie mniejszą wariancją. Świadczy to o stabilniejszym i bardziej przewidywalnym napływie konsumentów. Jednocześnie w obu tych grupach różnice rozkładu między konkretnymi dniami wydają się dużo mniej znaczące.
+
+```{r boxplot - events, include=TRUE}
+boxplot(no.klients~events, data=dane, xlab="Wydarzenie sportowe (events)", ylab="Liczba klientów (no.klients)")
+```
+
+Wykres pudełkowy w podziale na występowanie wydarzeń sportowych (zmienna binarna *events*) wskazuje na nieznaczny wpływ tych zdarzeń na liczbę obsługiwanych klientów.
+W dniach, w których odbywały się wydarzenia sportowe, mediana liczby klientów jest wyższa o kilka jednostek w porównaniu do pozostałych dni. Można zaobserwować lekkie przesunięcie w górę całego rozkładu międzykwartylowego, co sugeruje niewielki wzrost zainteresowania zakupami powiązanych z tymi wydarzeniami.
+W obu grupach widoczna jest zbliżona, wysoka liczba wartości odstających, sięgających poziomu $80$ klientów na godzinę. Zatem sama obecność wydarzeń sportowych nie jest czynnikiem generującym największe ekstrema, choć podnoszą one lekko bazowy poziom ruchu.
+
+
+```{r boxplot - hour, include=TRUE}
+boxplot(no.klients~hour, data=dane, xlab="Godzina (hour)", ylab="Liczba klientów (no.klients)")
+```
+
+Wykres pudełkowy przedstawiający liczbę klientów w zależności od godziny (zmienna *hour*) ujawnia znaczne zmiany dynamiki natężenia ruchu w ciągu doby. Następuje istotny spadek liczby klientów w godzinach $12$-$15$ oraz gwałtowny jej wzrost między godziną $16$ a $19$. W tym drugim przedziale czasowym mediana wzrasta blisko dwukrotnie względem godzin porannych i wieczornych, osiągając poziom ok. $55$–$60$ klientów na godzinę.
+W godzinach wzmożonego ruchu odnotowuje się również największą dyspersję danych. Dolny kwartyl rozkładów zmiennej $y$ w przedziale między godziną $16$ a $19$ osiąga podobne wartości, co w pozostałych porach dnia. Rozstęp międzykwartylowy zmiennej w godzinach porannych ($8$-$11$) i wieczornych ($20$-$23$) jest około trzykrotnie mniejszy niż w godzinach zwiększonego ruchu. Najmniejszą wariancją charakteryzują się jednak godziny południowe ($12$–$15$), kiedy to następuje przejściowy spadek frekwencji.
+Taka struktura zmienności pozwala na dokonanie podziału dnia na uśrednione pory, co $4$ godziny.
+
+\newpage
+
+Poniższy wykres punktowy stanowi zbiorcze zestawienie wpływu godziny, typu dnia oraz wydarzeń specjalnych na liczbę klientów. Pozwala on na jednoczesną obserwację korelacji między wszystkimi predyktorami modelu.
+
+```{r plot - wszystkie zmienne, include=TRUE}
+qplot(hour,no.klients, shape = as.factor(events),col = day, data = dane, xlab = "Godzina (hour)", ylab = "Liczba klientów (no.klients)") +
+  labs(col = "Dzień tygodnia (day)", 
+       shape = "Wydarzenia specjalne (event)")
+# sobota i niedziela wplywa na wariancje w godz 16-19
+# tendencja weekendowa - mniej klientow
+```
+
+Wykres ten wskazuje na przyczynę zawyżonej wariancji rozkładu zmiennej $y$ względem godziny w przedziale między $16$ a $19$. Występuje w nim widoczna separacja danych pochodzących z dni roboczych względem weekendów. W dni robocze liczba klientów obsługiwanych w ciągu godziny jest znacząco wyższa, podczas gdy w dni weekendowe rozkład utrzymuje się na podobnym poziomie, co w przypadku pozostałych pór dnia. Wskazuje to na występowanie istotnej interakcji między porą dnia a rodzajem dnia tygodnia.
+Na wykresie widać również inne omawiane wcześniej zależności tj. zmniejszoną liczbę klientów w soboty i niedziele (punkty w kolorach różowym i fioletowym), czy nieznacznie zwiększony ruch w dni z wydarzeniami sportowymi (punkty oznaczone trójkątami).
+
+\newpage
+Porównano także dokładniej wpływ wydarzeń sportowych na liczbę klientów przy jednoczesnym uwzględnieniu pór dnia i godzin.
+
+```{r plot - hour i events, include=TRUE}
+qplot(hour, no.klients, facets = events~day, data = dane, ylab = "Liczba klientów (no.klients)", xlab = "Godzina (hour)", main = "Wpływ wydarzeń sportowych na ruch w poszczególne dni")
+```
+
+Powyższa wizualizacja potwierdza wcześniejsze przypuszczenia o dominującej roli podziału na dni robocze i weekendy, niezależnie od występowania wydarzeń sportowych. 
+Porównując górny i dolny wiersz wykresów, można zauważyć, że obecność tych wydarzeń (wiersz dolny) nie zmienia zbytnio charakteru profilu godzinowego. Zachowane zostają zarówno popołudniowy wzmożony ruch w dni robocze, jak i stabilny poziom ruchu w weekendy.
+
+\newpage
+
+Ponownie przeanalizowano interakcję między godziną a dniem tygodnia oraz ich wspólny wpływ na zmienną $y$, uproszczając wykres poprzez rezygnacje z dodatkowego oznaczania dni z wydarzeniem sportowym.
+
+```{r plot - day i hour, include=TRUE}
+qplot(hour,no.klients, color = day, data = dane, ylab = "Liczba klientów (no.klients)", xlab = "Godzina (hour)", main = "Liczba klientów w różne dni tygodnia") +
+  labs(col = "Dzień tygodnia (day)")
+```
+
+Uzyskany wykres w pełni potwierdza poprzednie obserwacje. Wyraźna, pionowa separacja chmury punktów w godzinach $16$–$19$ uwidacznia różnicę między dniami roboczymi (klaster górny) a weekendami (klaster dolny), co wskazuje na interakcje obu zmiennych objaśniających. W dni weekendu rozkład zmiennej $y$ jest stabilny na przestrzeni godzin. W dni robocze natomiast widoczne są zmiany w obrębie wspomnianego wcześniej podziału na $4$-godzinne przedziały różnych pór dnia.
+
+\newpage
+
+Ten sam podział rozkładu zmiennej $y$ na pory dnia oraz dni tygodnia przedstawiono dokładniej na poniższym wykresie.
+
+```{r plot - hour i osobno day, include=TRUE}
+qplot(hour,no.klients, facets = ~day, data = dane, ylab = "Liczba klientów (no.klients)", xlab = "Godzina (hour)", main = "Liczba klientów w podziale na dni tygodnia")
+
+```
+
+Wnioski z wykresu pozostają te same. Jednocześnie dużo wyraźniej można dostrzec skokową zmianę poziomu ruchu w dni robocze między przedziałami godzinowymi: $8$-$11$, $12$-$15$, $16$-$19$ i $20$-$23$.
+
+\newpage
+
+# Wybór optymalnego modelu
+
+Po wstępnej analizie można postawić następujące hipotezy:
+
+* zmienna *events* nie ma wpływu na $y$,
+
+* istnieje możliwość pogrupowania dni oraz godzin tak, aby zredukować liczbę zmiennych,
+
+* rozkład klientów w weekend jest jednostajny.
+
+Skonstruowany model Poissona z interakcją pomiędzy wszystkimi regresorami, posiada aż $224$ zmiennych. Model Poissona z pominięciem wpływu wydarzeń sportowych zmniejsza tę wartość o połowe. Zatem słusznym jest sprawdzenie, czy modele te są od siebie istotnie różne. Wykorzystano do tego test ilorazu wiarogodności (ANOVA z testem $\chi^2$).
+
+```{r roznicowanie wzgl events, include=TRUE}
+m1 <- glm(no.klients~as.factor(hour)*day, data = dane, family = poisson)
+m12 <- glm(no.klients~as.factor(hour)*day*as.factor(events), data = dane, family = poisson)
+#summary(m12)
+
+anova(m1, m12, test="Chisq")    # brak statystycznej roznicy
+# wyrzucenie 112 zmiennych ---> dosc powazna redukcja (dobrze!)
+```
+
+Porównanie obu modeli wykazało brak istotnych statystycznie różnic ($p = 0.3755 > 0.05$). Wynik ten pozwala na usunięcie aż $112$ zbędnych parametrów, co stanowi znaczącą redukcję złożoności modelu bez utraty jego zdolności predykcyjnej.
+
+Następnie zbadano zasadność utrzymania interakcji między godziną a dniem tygodnia poprzez analogiczny test (porównanie modelów z interakcją i bez interakcji).
+
+```{r roznicowanie wzgl interakcji, include=TRUE}
+m2 <- glm(no.klients~as.factor(hour)+day, data = dane, family = poisson)
+
+anova(m2, m1, test="Chisq")     # jakas interakcja zachodzi --- roznica w modelach jest znaczaca
+# nie mozemy jeszcze dodatkowo uproscic modelu
+```
+
+Wynik powyższego testu wskazuje, że różnica między modelami jest wysoce istotna statystycznie  ($p$-wartość bliska zeru). Oznacza to, że wpływ godziny na liczbę klientów jest zależny także od dnia tygodnia. Jest to zgodne z intuicjami po wstępnej analizie danych - w dni robocze ruch w sklepie był uzależniony od godzin, podczas gdy w weekendy utrzymywał się na stabilnym poziomie.
+
+\newpage
+
+W poprzedniej części raportu wskazywano na sensowność podziału dni na robocze i weekendowe oraz podzielenie godzin w ciągu dnia na $4$-godzinne bloki. Obie te zmienne zaimplementowano i zbudowano kolejne modele Poissona, traktując nowe zmienne jako faktory. Model *m3* oparty na zmiennych *hour* i *rob* (dni robocze) ma $32$ parametry, a model *m4* oparty na zmiennych *rob* i *pora* (pora dnia) ma ich już tylko $8$. Następnie wykonano ponownie testy (ANOVA) porównujące: model *m3* do modelu z $112$ zmiennymi oraz model *m3* z *m4*. 
+
+```{r dni robocze vs weekend, include=TRUE}
+# zad.4
+dane$rob <- abs(1*(dane$day %in% c("Saturday", "Sunday"))-1)
+m3 <- glm(no.klients~as.factor(hour)*rob, data = dane, family = poisson)
+#summary(m3)  # 32 zmienne
+
+anova(m3, m1, test="Chisq")  # brak roznicy statystycznej
+# mozna zostawic ten podzial na dni robocze (-80 zmiennych)
+
+dane$pora <- 1*(dane$hour %in% 8:11) + 2*(dane$hour %in% 12:15) + 3*(dane$hour %in% 16:19) +
+  4*(dane$hour %in% 20:23)
+
+m4 <- glm(no.klients~as.factor(pora)*rob, data = dane, family = poisson)
+
+anova(m4,m1, test="Chisq")  # brak roznicy statystycznej (lacznie -104 zmienne)
+# mozna zostawic podzial na pory dnia
+
+#summary(m4) # 8 zmiennych
+```
+
+Wyniki obu testów pozwalają na stwierdzenie, że modele te nie są istotnie różne. W przypadku porównania modelu z $112$ zmiennymi z modelem *m3* $p$-wartość wyniosła $0.7997$, a test dla modeli *m3* i *m4* była ona równa $0.9794$. Obie wartości znacznie przewyższają poziom istotności $\alpha=0.05$. Zatem zmniejszono potrzebną liczbę zmiennych o kolejne $104$ zmienne (z $112$ do $8$).
+Choć wstępna analiza danych sugeruje, że interakcja między porami dnia a zmienną *rob* określającą typ dnia jest istotna, sprawdzono to dodatkowo porównując model *m4* z modelem bez interakcji *m5*.
+
+```{r dni robocze vs weekend - interakcje, include=TRUE}
+m5 <- glm(no.klients~as.factor(pora)+rob, data = dane, family = poisson)
+
+anova(m4,m5, test="Chisq")   # interakcja jest istotna
+```
+
+Wyniki testu ANOVA wskazują, że interakcja faktycznie jest istotna ($p$-wartość bliska zeru). Zatem model z interakcjami można uznać za optymalny. Ostatecznie liczba zmiennych w optymalnym modelu jest równa $8$.
+
+\newpage
+
+# Porównanie dni roboczych i weekendowych
+
+Bazując na wybranym optymalnym modelu $m_4$, wyznaczono teoretyczne wartości natężenia ruchu dla poszczególnych podgrup. W poniższych zestawieniach przedstawiono prognozowaną średnią liczbę klientów na godzinę ($\hat{y}$), postać predyktora liniowego $\eta$ oraz jego wartości punktowe. Tabele podzielono na dni robocze i weekendowe, aby zachować przejrzystość zestawienia i porównanać między sobą wyniki w obu podgrupach.
+
+
+```{r table - kable, include=TRUE}
+# podzial na podgrupy (4 pory x 2 rodzaje dni tygodnia)
+dane_group <- data.frame(
+  pora = factor(rep(1:4, 2)), 
+  rob = rep(c(0, 1), each = 4)
+)
+
+dane_group$eta <- predict(m4, newdata = dane_group) 
+dane_group$y_hat <- exp(dane_group$eta) # srednia wartosc (z m4)
+
+# postac teoretyczna
+b <- paste0("\\hat{\\beta}_", 0:7)
+
+dane_group$postac <- c(
+  paste0("$", b[1], "$"), 
+  paste0("$", b[1], "+", b[2], "$"), 
+  paste0("$", b[1], "+", b[3], "$"), 
+  paste0("$", b[1], "+", b[4], "$"),
+  paste0("$", b[1], "+", b[5], "$"), 
+  paste0("$", b[1], "+", b[2], "+", b[5], "+", b[6], "$"), 
+  paste0("$", b[1], "+", b[3], "+", b[5], "+", b[7], "$"), 
+  paste0("$", b[1], "+", b[4], "+", b[5], "+", b[8], "$")
+)
+
+# transpozycja
+tabela <- data.frame(
+  y_hat = round(dane_group$y_hat, 2),
+  postac = dane_group$postac,
+  eta = round(dane_group$eta, 4)
+)
+
+tabela <- as.data.frame(t(tabela))
+
+# opisy wierszy
+tabela_final <- cbind(
+  " " = c("Średnia liczba klientów na godzinę", "Postać predyktora ($\\eta_i$)", "Wartość $\\eta_i$"),
+  tabela)
+
+# podzial na dwie tabele (dla czytelnosci)
+tabela_weekend <- tabela_final[, 1:5]
+tabela_roboczy <- tabela_final[, c(1, 6:9)]
+
+naglowki_W <- c("", paste("Weekend", c("8-12", "12-16", "16-20", "20-23")))
+naglowki_R <- c("", paste("Roboczy", c("8-12", "12-16", "16-20", "20-23")))
+
+kable(tabela_weekend, 
+      format = "latex",
+      col.names = naglowki_W,
+      row.names = FALSE,
+      booktabs = TRUE,
+      align = "lcccc",
+      escape = FALSE) %>%
+  kable_styling(latex_options = "hold_position") %>%
+  column_spec(1, width = "3.5cm") %>%
+  column_spec(2:5, width = "3cm")
+
+kable(tabela_roboczy,
+      format = "latex",
+      col.names = naglowki_R,
+      row.names = FALSE,
+      booktabs = TRUE,
+      align = "lcccc",
+      escape = FALSE) %>%
+  kable_styling(latex_options = "hold_position") %>%
+  column_spec(1, width = "3.5cm") %>%
+  column_spec(2:5, width = "3cm")
+```
+
+
+Analiza danych w tabelach jest spójna z wnioskami wyciągniętymi we wcześniejszej częsci raportu. Wyraźnie widać, że w weekendy ruch w sklepie jest bardzo przewidywalny i utrzymuje się na stałym, stosunkowo niskim poziomie około $15$ klientów na godzinę. Sytuacja z dni roboczych jest zupełnie inna. Między godziną $16$ a $20$ następuje gwałtowny wzrost liczby osób – średnia skacze wtedy do poziomu ponad $55$ klientów na godzinę. Tak duże różnice pokazują, dlaczego zastosowanie interakcji w modelu było niezbędne. Gdyby pominąć fakt, że wartości natężenia klientów w dni robocze są zupełnie inne niż w weekendy, model podawałby błędne, uśrednione wyniki. Dzięki wprowadzeniu parametrów interakcji ($\hat{\beta}_6$–$\hat{\beta}_8$), model $m_4$ uwzględnia skoki w natężeniu. Ostateczne wyniki są w pełni zgodne z danymi przedstawionymi na wykresach, co dowodzi, że model – mimo dużej redukcji zmiennych – bardzo dobrze opisuje rzeczywisty ruch w sklepie.
+
+W celu potwierdzenia hipotezy o jednostajnym rozkładzie ruchu w weekendy, przeprowadzono test istotności łącznej parametrów dotyczących pór dnia dla tej grupy (test Walda). Badano hipotezę zerową zakładającą, że współczynniki przy zmiennych $\text{pora}2, \text{pora}3$ oraz $\text{pora}4$ są równocześnie równe zero.
+
+```{r zad.6, include=TRUE}
+library(car)
+
+# Testujemy, czy efekty pór dnia (2, 3, 4) są istotne dla grupy odniesienia (weekend)
+# H0: nic nie wnosza - p>0.05 - nieistotne OK
+test_weekend <- linearHypothesis(m4, c("as.factor(pora)2 = 0", 
+                                       "as.factor(pora)3 = 0", 
+                                       "as.factor(pora)4 = 0"))
+
+print(test_weekend)
+```
+Wynik testu ($p = 0.7095 > 0.05$) wskazuje na brak podstaw do odrzucenia hipotezy zerowej. Oznacza to, że w dni weekendowe zmiany pory dnia nie wpływają w sposób istotny statystycznie na liczbę obsługiwanych klientów. Wynik ten potwierdza, że dla soboty i niedzieli model można uprościć do samej wartości średniej (wyrazu wolnego), co jest zgodne z wcześniejszymi obserwacjami.
+
+
+# Dobór odpowiedniego grafiku pracy
+
+Uzyskany model pozwala na sformułowanie praktycznych dotyczące zarządzania personelem.
+Poniżej zaproponowano optymalną liczbę pracowników na konkretne godziny (planowy grafik pracy). Przyjęto założenie, zgodnie z którym jeden pracownik jest w stanie obsłużyć do $20$ klientów w ciągu godziny. Na podstawie wartości oczekiwanych $\hat{y}$ wyznaczono niezbędną obsadę (zastosowano zaokrąglenie w górę). Zestawienie zalecanej liczby pracowników przedstawiono w poniższej tabeli:
+
+```{r zad.7, include=TRUE}
+# y_hat - oczekiwana liczba klientow
+# 1 pracownik na 20 klientow
+dane_group$obsada <- ceiling(dane_group$y_hat/20)
+
+# opis kolumn
+etykiety_godzin <- c("8-12", "12-16", "16-20", "20-23")
+kolumna_opisowa <- paste(
+  ifelse(dane_group$rob==1, "Roboczy", "Weekend"), 
+  rep(etykiety_godzin, 2))
+
+# Tabela z grafikiem:
+grafik_table <- data.frame(
+  "Dzień i Pora" = kolumna_opisowa,
+  "Przewidywani klienci/h" = round(dane_group$y_hat, 2),
+  "Liczba pracowników" = dane_group$obsada,
+  check.names = FALSE
+)
+
+kable(grafik_table, 
+      format = "latex", 
+      booktabs = TRUE, 
+      align = "lcc",
+      linesep = c("","","","\\addlinespace"),   # przerwa miedzy dniami rob. a weekendem
+      caption = "Zalecana obsada personelu") %>%
+  kable_styling(latex_options = "hold_position")
+```
